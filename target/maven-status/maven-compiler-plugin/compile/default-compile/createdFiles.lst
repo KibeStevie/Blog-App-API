@@ -1,3 +1,4 @@
+com/blog/servlets/ImageServlet.class
 com/blog/servlets/TagsServlet.class
 com/blog/servlets/AuthServlet.class
 com/blog/db/DBConnection.class

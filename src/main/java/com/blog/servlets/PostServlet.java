@@ -1,14 +1,19 @@
 package com.blog.servlets;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Paths;
 import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,9 +24,16 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
+import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.Part;
+
+@MultipartConfig(fileSizeThreshold = 1024 * 1024 * 2, // 2MB
+        maxFileSize = 1024 * 1024 * 10, // 10MB
+        maxRequestSize = 1024 * 1024 * 50 // 50MB
+)
 
 public class PostServlet extends HttpServlet {
     private final Gson gson = new Gson();
@@ -120,6 +132,7 @@ public class PostServlet extends HttpServlet {
 
     // 🔹 CREATE POST
     private void handleCreatePost(HttpServletRequest req, HttpServletResponse resp, PrintWriter out) throws Exception {
+
         String sessionIdStr = req.getHeader("X-Session-Id");
         if (sessionIdStr == null) {
             resp.setStatus(401);
@@ -128,19 +141,63 @@ public class PostServlet extends HttpServlet {
         }
 
         UUID sessionId = UUID.fromString(sessionIdStr);
-        JsonObject json = gson.fromJson(req.getReader(), JsonObject.class);
 
-        // Extract optional arrays
-        JsonArray tagNames = json.has("tags") ? json.getAsJsonArray("tags") : null;
-        JsonArray imageUrls = json.has("images") ? json.getAsJsonArray("images") : null;
+        // ✅ Get normal form fields
+        String title = req.getParameter("title");
+        String content = req.getParameter("content");
+        String isPublishedStr = req.getParameter("is_published");
+
+        boolean isPublished = isPublishedStr == null || isPublishedStr.equals("1");
+
+        // ✅ Tags (optional - comma separated)
+        String[] tagNames = req.getParameterValues("tag_names");
+
+        // ✅ IMAGE UPLOAD HANDLING
+        Part coverImagePart = req.getPart("cover_image");
+
+        String coverImagePath = null;
+
+        if (coverImagePart != null && coverImagePart.getSize() > 0) {
+
+            // 📁 Define upload directory
+            String uploadDirPath = getServletContext().getRealPath("")
+                    + File.separator + "image_upload"
+                    + File.separator + "cover_images";
+
+            File uploadDir = new File(uploadDirPath);
+
+            // ✅ Create folder if not exists
+            if (!uploadDir.exists()) {
+                uploadDir.mkdirs();
+            }
+
+            // ✅ Generate unique filename
+            String fileName = Paths.get(coverImagePart.getSubmittedFileName()).getFileName().toString();
+            String extension = "";
+
+            if (fileName.contains(".")) {
+                extension = fileName.substring(fileName.lastIndexOf("."));
+            }
+
+            String newFileName = UUID.randomUUID().toString() + extension;
+
+            String fullPath = uploadDirPath + File.separator + newFileName;
+
+            // ✅ Save file
+            coverImagePart.write(fullPath);
+
+            // ✅ Save relative path (or URL)
+            coverImagePath = "uploads/cover_images/" + newFileName;
+        }
 
         try (Connection conn = DBConnection.getConnection();
                 CallableStatement cs = conn.prepareCall("{call fn_create_post(?, ?, ?, ?, ?, ?, ?)}")) {
 
-            // Get user_id from session
+            // ✅ Validate session
             int userId;
             try (CallableStatement csSession = conn.prepareCall("{call fn_validate_session(?)}")) {
                 csSession.setObject(1, sessionId, Types.OTHER);
+
                 try (ResultSet rs = csSession.executeQuery()) {
                     if (!rs.next() || !rs.getBoolean("success")) {
                         resp.setStatus(401);
@@ -151,15 +208,22 @@ public class PostServlet extends HttpServlet {
                 }
             }
 
+            // ✅ Set params
             cs.setInt(1, userId);
-            cs.setString(2, json.get("title").getAsString());
-            cs.setString(3, json.get("content").getAsString());
-            cs.setString(4, json.has("cover_image") ? json.get("cover_image").getAsString() : null);
-            cs.setBoolean(5, json.has("is_published") ? json.get("is_published").getAsBoolean() : true);
+            cs.setString(2, title);
+            cs.setString(3, content);
+            cs.setString(4, coverImagePath);
+            cs.setBoolean(5, isPublished);
 
-            // Convert JsonArray to String[] for PostgreSQL
-            cs.setArray(6, conn.createArrayOf("text", jsonArrayToStringArray(tagNames)));
-            cs.setArray(7, conn.createArrayOf("text", jsonArrayToStringArray(imageUrls)));
+            // ✅ Tags array
+            if (tagNames != null) {
+                cs.setArray(6, conn.createArrayOf("text", tagNames));
+            } else {
+                cs.setNull(6, Types.ARRAY);
+            }
+
+            // ✅ Images (not used for now)
+            cs.setNull(7, Types.ARRAY);
 
             try (ResultSet rs = cs.executeQuery()) {
                 if (rs.next() && rs.getBoolean("success")) {
@@ -461,34 +525,103 @@ public class PostServlet extends HttpServlet {
         int page = parseIntParam(req, "page", 1);
         int limit = parseIntParam(req, "limit", 20);
 
-        try (Connection conn = DBConnection.getConnection();
-                CallableStatement cs = conn.prepareCall("{call fn_get_comments(?, ?, ?)}")) {
+        try (Connection conn = DBConnection.getConnection()) {
 
-            cs.setInt(1, postId);
-            cs.setInt(2, page);
-            cs.setInt(3, limit);
-
-            try (ResultSet rs = cs.executeQuery()) {
-                List<Map<String, Object>> comments = new ArrayList<>();
-                while (rs.next()) {
-                    Map<String, Object> comment = new LinkedHashMap<>();
-                    comment.put("comment_id", rs.getInt("comment_id"));
-                    comment.put("user_id", rs.getInt("user_id"));
-                    comment.put("username", rs.getString("username"));
-                    comment.put("profile_image", rs.getString("profile_image"));
-                    comment.put("content", rs.getString("content"));
-                    comment.put("created_at", rs.getTimestamp("created_at"));
-                    // ✅ Handles NULL gracefully for top-level comments
-                    comment.put("parent_comment_id", rs.getObject("parent_comment_id"));
-                    comment.put("reply_count", rs.getLong("reply_count"));
-                    comments.add(comment);
+            // ✅ Step 1: Get TOTAL count of top-level comments (ignoring pagination)
+            int totalTopLevelComments = 0;
+            try (PreparedStatement countStmt = conn.prepareStatement(
+                    "SELECT COUNT(*) FROM comments WHERE post_id = ? AND parent_comment_id IS NULL")) {
+                countStmt.setInt(1, postId);
+                try (ResultSet countRs = countStmt.executeQuery()) {
+                    if (countRs.next()) {
+                        totalTopLevelComments = countRs.getInt(1);
+                    }
                 }
-                JsonObject res = new JsonObject();
-                res.add("comments", gson.toJsonTree(comments));
-                res.addProperty("page", page);
-                res.addProperty("limit", limit);
-                out.print(res);
             }
+
+            // ✅ Step 2: Fetch ALL comments for this post (no pagination in DB)
+            List<Map<String, Object>> flatComments = new ArrayList<>();
+            try (CallableStatement cs = conn.prepareCall("{call fn_get_comments(?)}")) {
+                cs.setInt(1, postId);
+
+                try (ResultSet rs = cs.executeQuery()) {
+                    while (rs.next()) {
+                        Map<String, Object> comment = new LinkedHashMap<>();
+                        comment.put("comment_id", rs.getInt("comment_id"));
+                        comment.put("user_id", rs.getInt("user_id"));
+                        comment.put("username", rs.getString("username"));
+                        comment.put("profile_image", rs.getString("profile_image"));
+                        comment.put("content", rs.getString("content"));
+                        comment.put("created_at", rs.getTimestamp("created_at"));
+                        comment.put("parent_comment_id", rs.getObject("parent_comment_id"));
+                        comment.put("reply_count", rs.getLong("reply_count"));
+                        comment.put("replies", new ArrayList<Map<String, Object>>());
+                        flatComments.add(comment);
+                    }
+                }
+            }
+
+            // ✅ Step 3: Build comment map for O(1) lookups
+            Map<Integer, Map<String, Object>> commentMap = new LinkedHashMap<>();
+            for (Map<String, Object> comment : flatComments) {
+                Integer commentId = (Integer) comment.get("comment_id");
+                commentMap.put(commentId, comment);
+            }
+
+            // ✅ Step 4: Separate top-level comments and replies
+            List<Map<String, Object>> allTopLevelComments = new ArrayList<>();
+            for (Map<String, Object> comment : flatComments) {
+                Integer parentCommentId = (Integer) comment.get("parent_comment_id");
+                if (parentCommentId == null) {
+                    allTopLevelComments.add(comment);
+                }
+            }
+
+            // ✅ Step 5: Apply pagination to top-level comments ONLY
+            List<Map<String, Object>> paginatedTopLevelComments = new ArrayList<>();
+            int offset = (page - 1) * limit;
+            int startIndex = Math.min(offset, allTopLevelComments.size());
+            int endIndex = Math.min(startIndex + limit, allTopLevelComments.size());
+
+            for (int i = startIndex; i < endIndex; i++) {
+                paginatedTopLevelComments.add(allTopLevelComments.get(i));
+            }
+
+            // ✅ Step 6: Recursively nest replies (supports replies to replies)
+            for (Map<String, Object> comment : flatComments) {
+                Integer parentCommentId = (Integer) comment.get("parent_comment_id");
+                if (parentCommentId != null) {
+                    Map<String, Object> parent = commentMap.get(parentCommentId);
+                    if (parent != null) {
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> replies = (List<Map<String, Object>>) parent.get("replies");
+                        replies.add(comment);
+                    }
+                }
+            }
+
+            // ✅ Step 7: Sort replies chronologically within each parent
+            for (Map<String, Object> comment : flatComments) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> replies = (List<Map<String, Object>>) comment.get("replies");
+                if (!replies.isEmpty()) {
+                    replies.sort(Comparator.comparing(c -> (Timestamp) c.get("created_at")));
+                }
+            }
+
+            // ✅ Step 8: Calculate has_more
+            // has_more = true if there are more top-level comments beyond current page
+            boolean hasMore = endIndex < totalTopLevelComments;
+
+            // ✅ Step 9: Build response with nested structure + pagination metadata
+            JsonObject res = new JsonObject();
+            res.add("comments", gson.toJsonTree(paginatedTopLevelComments));
+            res.addProperty("page", page);
+            res.addProperty("limit", limit);
+            res.addProperty("total", totalTopLevelComments);
+            res.addProperty("has_more", hasMore); // ✅ Add has_more field
+
+            out.print(res);
         }
     }
 

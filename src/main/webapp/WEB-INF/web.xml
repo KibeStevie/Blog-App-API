@@ -27,6 +27,15 @@
     <url-pattern>/api/posts/*</url-pattern>
   </servlet-mapping>
 
+  <servlet>
+    <servlet-name>ImageServlet</servlet-name>
+    <servlet-class>com.blog.servlets.ImageServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>ImageServlet</servlet-name>
+    <url-pattern>/api/uploads/*</url-pattern>
+  </servlet-mapping>
+
   <!-- Tags Servlet (when you create it) -->
   <servlet>
     <servlet-name>TagsServlet</servlet-name>

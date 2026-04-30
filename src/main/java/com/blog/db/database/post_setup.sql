@@ -726,31 +726,29 @@ $$ LANGUAGE plpgsql;
 
 -- 5.10 GET COMMENTS FOR POST (with pagination)
 CREATE OR REPLACE FUNCTION fn_get_comments(
-  p_post_id INT,
-  p_page INT DEFAULT 1,
-  p_limit INT DEFAULT 20
+  p_post_id INT
 )
 RETURNS TABLE(
   comment_id INT, user_id INT, username VARCHAR, profile_image TEXT,
   content TEXT, created_at TIMESTAMP, parent_comment_id INT, reply_count BIGINT
 ) AS $$
 #variable_conflict use_column
-DECLARE
-  v_offset INT;
 BEGIN
-  v_offset := (p_page - 1) * p_limit;
-
   RETURN QUERY
   SELECT 
-    c.comment_id, c.user_id, u.username, u.profile_image,
-    c.content, c.created_at, c.parent_comment_id,
-    -- ✅ Aliased subquery eliminates ambiguity
+    c.comment_id, 
+    c.user_id, 
+    u.username, 
+    u.profile_image,
+    c.content, 
+    c.created_at, 
+    c.parent_comment_id,
+    -- ✅ Count replies for each comment
     (SELECT COUNT(*) FROM comments c2 WHERE c2.parent_comment_id = c.comment_id) AS reply_count
   FROM comments c
   JOIN users u ON c.user_id = u.user_id
   WHERE c.post_id = p_post_id
-  ORDER BY c.created_at ASC
-  LIMIT p_limit OFFSET v_offset;
+  ORDER BY c.created_at DESC;
 END;
 $$ LANGUAGE plpgsql;
 

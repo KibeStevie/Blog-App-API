@@ -1,14 +1,20 @@
 package com.blog.servlets;
 
-import jakarta.servlet.*;
+import java.io.IOException;
+
+import jakarta.servlet.Filter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.FilterConfig;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.io.IOException;
 
 public class CorsFilter implements Filter {
 
     // 🔧 Configure these for your environment
-    private static final String ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:8080,https://yourapp.com";
+    private static final String ALLOWED_ORIGINS = "*";
     private static final String ALLOWED_METHODS = "GET,POST,PUT,DELETE,OPTIONS";
     private static final String ALLOWED_HEADERS = "Content-Type,Authorization,X-Session-Id,X-Requested-With,Accept,Origin";
     private static final String EXPOSED_HEADERS = "Content-Range,X-Content-Range";

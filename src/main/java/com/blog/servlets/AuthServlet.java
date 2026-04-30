@@ -142,12 +142,20 @@ public class AuthServlet extends HttpServlet {
                 if (rs.next()) {
                     boolean success = rs.getBoolean("success");
                     if (success) {
-                        UUID sessionId = (UUID) rs.getObject("session_id");
-                        int userId = rs.getInt("user_id");
-                        out.print("{\"session_id\":\"" + sessionId + "\", \"user_id\":" + userId + "}");
+                        JsonObject dataObj = new JsonObject();
+                        dataObj.addProperty("session_id", rs.getObject("session_id", UUID.class).toString());
+                        dataObj.addProperty("user_id", rs.getInt("user_id"));
+                        JsonObject response = new JsonObject();
+                        response.addProperty("success", true);
+                        response.addProperty("message", rs.getString("message"));
+                        response.add("data", dataObj);
+                        out.print(gson.toJson(response));
                     } else {
                         resp.setStatus(401);
-                        out.print("{\"error\":\"" + escapeJson(rs.getString("error")) + "\"}");
+                        JsonObject response = new JsonObject();
+                        response.addProperty("success", false);
+                        response.addProperty("message", rs.getString("message"));
+                        out.print(gson.toJson(response));
                     }
                 }
             }
@@ -177,20 +185,27 @@ public class AuthServlet extends HttpServlet {
 
             try (ResultSet rs = cs.executeQuery()) {
                 if (rs.next() && rs.getBoolean("success")) {
-                    Map<String, Object> profile = new LinkedHashMap<>();
-                    profile.put("user_id", rs.getObject("user_id"));
-                    profile.put("username", rs.getString("username"));
-                    profile.put("email", rs.getString("email"));
-                    profile.put("bio", rs.getString("bio"));
-                    profile.put("profile_image", rs.getString("profile_image"));
-                    profile.put("theme", rs.getString("theme"));
-                    profile.put("email_notifications", rs.getBoolean("email_notifications"));
-                    profile.put("push_notifications", rs.getBoolean("push_notifications"));
-                    profile.put("privacy_mode", rs.getString("privacy_mode"));
-                    out.print(gson.toJson(profile));
+                    JsonObject dataObj = new JsonObject();
+                    dataObj.addProperty("user_id", rs.getInt("user_id"));
+                    dataObj.addProperty("username", rs.getString("username"));
+                    dataObj.addProperty("email", rs.getString("email"));
+                    dataObj.addProperty("bio", rs.getString("bio"));
+                    dataObj.addProperty("profile_image", rs.getString("profile_image"));
+                    dataObj.addProperty("theme", rs.getString("theme"));
+                    dataObj.addProperty("email_notifications", rs.getBoolean("email_notifications"));
+                    dataObj.addProperty("push_notifications", rs.getBoolean("push_notifications"));
+                    dataObj.addProperty("privacy_mode", rs.getString("privacy_mode"));
+
+                    JsonObject response = new JsonObject();
+                    response.addProperty("success", true);
+                    response.add("data", dataObj);
+                    out.print(gson.toJson(response));
                 } else {
                     resp.setStatus(401);
-                    out.print("{\"error\":\"" + escapeJson(rs.getString("error")) + "\"}");
+                    JsonObject response = new JsonObject();
+                    response.addProperty("success", false);
+                    response.addProperty("message", rs.getString("error"));
+                    out.print(gson.toJson(response));
                 }
             }
         }
