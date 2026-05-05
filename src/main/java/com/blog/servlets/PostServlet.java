@@ -76,9 +76,9 @@ public class PostServlet extends HttpServlet {
                 handleGetPost(req, resp, out, path);
             } else if (path.matches("/\\d+/comments")) {
                 handleGetComments(req, out, path);
-            } else if (path.matches("/users/\\d+")) {
-                handleGetUserPosts(req, out, path);
-            } else if (path.matches("/users/\\d+/bookmarks")) {
+            } else if ("/users/posts".equals(path)) {
+                handleGetUserPosts(req, resp, out);
+            } else if ("/users/bookmarks".equals(path)) {
                 handleGetBookmarks(req, resp, out);
             } else {
                 resp.setStatus(400);
@@ -657,10 +657,16 @@ public class PostServlet extends HttpServlet {
     }
 
     // 🔹 GET USER'S POSTS
-    private void handleGetUserPosts(HttpServletRequest req, PrintWriter out, String path)
+    private void handleGetUserPosts(HttpServletRequest req, HttpServletResponse resp, PrintWriter out)
             throws Exception {
-        // Extract user_id from path: /users/{id}
-        int userId = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
+        String sessionIdStr = req.getHeader("X-Session-Id");
+        if (sessionIdStr == null) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Unauthorized\"}");
+            return;
+        }
+
+        UUID sessionId = UUID.fromString(sessionIdStr);
         int page = parseIntParam(req, "page", 1);
         int limit = parseIntParam(req, "limit", 20);
         boolean includeUnpublished = "true".equalsIgnoreCase(req.getParameter("include_unpublished"));
@@ -668,7 +674,7 @@ public class PostServlet extends HttpServlet {
         try (Connection conn = DBConnection.getConnection();
                 CallableStatement cs = conn.prepareCall("{call fn_get_user_posts(?, ?, ?, ?)}")) {
 
-            cs.setInt(1, userId);
+            cs.setObject(1, sessionId, Types.OTHER);
             cs.setInt(2, page);
             cs.setInt(3, limit);
             cs.setBoolean(4, includeUnpublished);

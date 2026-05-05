@@ -7,6 +7,10 @@
 
   <display-name>Blog API</display-name>
 
+  <listener>
+    <listener-class>com.blog.servlets.AppContextListener</listener-class>
+  </listener>
+
   <!-- Auth Servlet -->
   <servlet>
     <servlet-name>AuthServlet</servlet-name>

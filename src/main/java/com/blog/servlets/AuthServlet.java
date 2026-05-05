@@ -1,5 +1,6 @@
 package com.blog.servlets;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.security.MessageDigest;
@@ -36,6 +37,8 @@ public class AuthServlet extends HttpServlet {
                 handleRegister(req, resp, out);
             } else if ("/login".equals(path)) {
                 handleLogin(req, resp, out);
+            } else if ("/notifications".equals(path)) {
+                handleUpdateNotificationStatus(req, resp, out);
             } else if (path != null && path.startsWith("/unfollow/")) {
                 handleUnfollow(req, resp, out, path);
             } else if ("/logout".equals(path)) {
@@ -63,10 +66,12 @@ public class AuthServlet extends HttpServlet {
                 handleGetSession(req, resp, out);
             } else if ("/settings".equals(path)) {
                 handleGetSettings(req, resp, out);
-            } else if (path != null && path.startsWith("/followers/")) {
-                handleFollowers(resp, out, path);
-            } else if (path != null && path.startsWith("/following/")) {
-                handleFollowing(resp, out, path);
+            } else if ("/notifications".equals(path)) {
+                handleGetNotifications(req, resp, out);
+            } else if ("/followers".equals(path)) {
+                handleFollowers(req, resp, out);
+            } else if ("/following".equals(path)) {
+                handleFollowing(req, resp, out);
             } else {
                 resp.setStatus(400);
                 out.print("{\"error\":\"Unknown endpoint\"}");
@@ -91,6 +96,25 @@ public class AuthServlet extends HttpServlet {
         } else {
             resp.setStatus(400);
             out.print("{\"error\":\"Unknown endpoint\"}");
+        }
+    }
+
+    @Override
+    protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        resp.setContentType("application/json");
+        PrintWriter out = resp.getWriter();
+        String path = req.getPathInfo();
+
+        try {
+            if (path != null && path.startsWith("/notifications/")) {
+                handleDeleteNotification(req, resp, out, path);
+            } else {
+                resp.setStatus(400);
+                out.print("{\"error\":\"Unknown endpoint\"}");
+            }
+        } catch (Exception e) {
+            resp.setStatus(500);
+            out.print("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
         }
     }
 
@@ -306,20 +330,20 @@ public class AuthServlet extends HttpServlet {
     }
 
     // 🔹 GET FOLLOWERS - Calls fn_get_followers
-    private void handleFollowers(HttpServletResponse resp, PrintWriter out, String path) throws Exception {
-        int userId;
-        try {
-            userId = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
-        } catch (NumberFormatException e) {
-            resp.setStatus(400);
-            out.print("{\"error\":\"Invalid user ID\"}");
+    private void handleFollowers(HttpServletRequest req, HttpServletResponse resp, PrintWriter out) throws Exception {
+        String sessionIdStr = req.getHeader("X-Session-Id");
+        if (sessionIdStr == null) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Unauthorized\"}");
             return;
         }
+
+        UUID sessionId = UUID.fromString(sessionIdStr);
 
         try (Connection conn = DBConnection.getConnection();
                 CallableStatement cs = conn.prepareCall("{call fn_get_followers(?)}")) {
 
-            cs.setInt(1, userId);
+            cs.setObject(1, sessionId, Types.OTHER);
 
             try (ResultSet rs = cs.executeQuery()) {
                 List<Map<String, Object>> list = new ArrayList<>();
@@ -342,20 +366,20 @@ public class AuthServlet extends HttpServlet {
     }
 
     // 🔹 GET FOLLOWING - Calls fn_get_following
-    private void handleFollowing(HttpServletResponse resp, PrintWriter out, String path) throws Exception {
-        int userId;
-        try {
-            userId = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
-        } catch (NumberFormatException e) {
-            resp.setStatus(400);
-            out.print("{\"error\":\"Invalid user ID\"}");
+    private void handleFollowing(HttpServletRequest req, HttpServletResponse resp, PrintWriter out) throws Exception {
+        String sessionIdStr = req.getHeader("X-Session-Id");
+        if (sessionIdStr == null) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Unauthorized\"}");
             return;
         }
+
+        UUID sessionId = UUID.fromString(sessionIdStr);
 
         try (Connection conn = DBConnection.getConnection();
                 CallableStatement cs = conn.prepareCall("{call fn_get_following(?)}")) {
 
-            cs.setInt(1, userId);
+            cs.setObject(1, sessionId, Types.OTHER);
 
             try (ResultSet rs = cs.executeQuery()) {
                 List<Map<String, Object>> list = new ArrayList<>();
@@ -485,6 +509,182 @@ public class AuthServlet extends HttpServlet {
                     out.print("{\"error\":\"" + escapeJson(rs.getString("error")) + "\"}");
                 }
             }
+        }
+    }
+
+    private void handleGetNotifications(HttpServletRequest req, HttpServletResponse resp, PrintWriter out)
+            throws Exception {
+
+        String sessionId = req.getHeader("X-Session-Id");
+        if (sessionId == null || sessionId.isEmpty()) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Missing session ID\"}");
+            return;
+        }
+
+        int page = parseIntParam(req, "page", 1);
+        int limit = parseIntParam(req, "limit", 20);
+        boolean unreadOnly = Boolean.parseBoolean(req.getParameter("unread_only"));
+
+        try (Connection conn = DBConnection.getConnection();
+                CallableStatement cs = conn.prepareCall("{call fn_get_notifications(?, ?, ?, ?)}")) {
+
+            cs.setObject(1, UUID.fromString(sessionId), Types.OTHER);
+            cs.setInt(2, page);
+            cs.setInt(3, limit);
+            cs.setBoolean(4, unreadOnly);
+
+            try (ResultSet rs = cs.executeQuery()) {
+                List<Map<String, Object>> notifications = new ArrayList<>();
+                long totalCount = 0;
+
+                while (rs.next()) {
+                    Map<String, Object> notif = new LinkedHashMap<>();
+                    notif.put("notification_id", rs.getInt("notification_id"));
+                    notif.put("type", rs.getString("type"));
+                    notif.put("message", rs.getString("message"));
+                    notif.put("is_read", rs.getBoolean("is_read"));
+                    notif.put("created_at", rs.getTimestamp("created_at"));
+                    notif.put("reference_id", rs.getInt("reference_id"));
+                    notif.put("actor_username", rs.getString("actor_username"));
+                    notifications.add(notif);
+                }
+
+                JsonObject res = new JsonObject();
+                res.add("notifications", gson.toJsonTree(notifications));
+                res.addProperty("total", totalCount);
+                res.addProperty("page", page);
+                res.addProperty("limit", limit);
+                out.print(res);
+            }
+        }
+    }
+
+    private void handleUpdateNotificationStatus(HttpServletRequest req, HttpServletResponse resp, PrintWriter out)
+            throws Exception {
+
+        String sessionId = req.getHeader("X-Session-Id");
+        if (sessionId == null || sessionId.isEmpty()) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Missing session ID\"}");
+            return;
+        }
+
+        // Parse JSON Body
+        StringBuilder sb = new StringBuilder();
+        BufferedReader reader = req.getReader();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line);
+        }
+
+        if (sb.length() == 0) {
+            resp.setStatus(400);
+            out.print("{\"error\":\"Request body is empty\"}");
+            return;
+        }
+
+        JsonObject jsonBody = gson.fromJson(sb.toString(), JsonObject.class);
+
+        if (!jsonBody.has("notification_id") || !jsonBody.has("is_read")) {
+            resp.setStatus(400);
+            out.print("{\"error\":\"Missing notification_id or is_read\"}");
+            return;
+        }
+
+        int notificationId = jsonBody.get("notification_id").getAsInt();
+        boolean isRead = jsonBody.get("is_read").getAsBoolean();
+
+        try (Connection conn = DBConnection.getConnection();
+                CallableStatement cs = conn.prepareCall("{call fn_update_notification_status(?, ?, ?)}")) {
+
+            cs.setObject(1, UUID.fromString(sessionId), Types.OTHER);
+            cs.setInt(2, notificationId);
+            cs.setBoolean(3, isRead);
+
+            try (ResultSet rs = cs.executeQuery()) {
+                if (rs.next()) {
+                    boolean success = rs.getBoolean("success");
+                    String message = rs.getString("message");
+                    String error = rs.getString("error");
+
+                    JsonObject res = new JsonObject();
+                    res.addProperty("success", success);
+
+                    if (success) {
+                        res.addProperty("message", message);
+                        out.print(res);
+                    } else {
+                        resp.setStatus(400); // Or 403 if unauthorized
+                        res.addProperty("error", error);
+                        out.print(res);
+                    }
+                }
+            }
+        }
+    }
+
+    private void handleDeleteNotification(HttpServletRequest req, HttpServletResponse resp, PrintWriter out,
+            String path)
+            throws Exception {
+
+        String sessionId = req.getHeader("X-Session-Id");
+        if (sessionId == null || sessionId.isEmpty()) {
+            resp.setStatus(401);
+            out.print("{\"error\":\"Missing session ID\"}");
+            return;
+        }
+
+        // Extract ID from path: /notifications/5 -> 5
+        String[] parts = path.split("/");
+        if (parts.length < 3) {
+            resp.setStatus(400);
+            out.print("{\"error\":\"Invalid path. Use /notifications/{id}\"}");
+            return;
+        }
+
+        int notificationId;
+        try {
+            notificationId = Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            resp.setStatus(400);
+            out.print("{\"error\":\"Invalid notification ID\"}");
+            return;
+        }
+
+        try (Connection conn = DBConnection.getConnection();
+                CallableStatement cs = conn.prepareCall("{call fn_delete_notification(?, ?)}")) {
+
+            cs.setObject(1, UUID.fromString(sessionId), Types.OTHER);
+            cs.setInt(2, notificationId);
+
+            try (ResultSet rs = cs.executeQuery()) {
+                if (rs.next()) {
+                    boolean success = rs.getBoolean("success");
+                    String message = rs.getString("message");
+                    String error = rs.getString("error");
+
+                    JsonObject res = new JsonObject();
+                    res.addProperty("success", success);
+
+                    if (success) {
+                        res.addProperty("message", message);
+                        out.print(res);
+                    } else {
+                        resp.setStatus(400); // Or 404 if not found
+                        res.addProperty("error", error);
+                        out.print(res);
+                    }
+                }
+            }
+        }
+    }
+
+    private int parseIntParam(HttpServletRequest req, String name, int defaultValue) {
+        try {
+            return Integer.parseInt(req.getParameter(name));
+        } catch (NumberFormatException e) {
+            return defaultValue;
         }
     }
 
